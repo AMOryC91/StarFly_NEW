@@ -5,6 +5,7 @@ from typing import Callable, Dict, Any, Awaitable
 from aiogram import BaseMiddleware
 from aiogram.types import Message, CallbackQuery
 
+from config import TICKET_GROUP_ID
 from database import is_user_banned, get_ban, is_user_frozen, get_freeze_info, is_maintenance_mode, get_maintenance_info
 from helpers import has_access, format_datetime, get_user_role
 
@@ -92,6 +93,18 @@ class CheckMaintenanceMiddleware(BaseMiddleware):
         event: Message | CallbackQuery,
         data: Dict[str, Any]
     ) -> Any:
+        # Определяем ID чата, откуда пришло событие
+        chat_id = None
+        if isinstance(event, Message):
+            chat_id = event.chat.id
+        elif isinstance(event, CallbackQuery) and event.message:
+            chat_id = event.message.chat.id
+
+        # Если событие происходит в группе тикетов – пропускаем без проверки техработ
+        if chat_id == TICKET_GROUP_ID:
+            return await handler(event, data)
+
+        # Если техработы не включены – пропускаем
         if not is_maintenance_mode():
             return await handler(event, data)
 
@@ -121,7 +134,8 @@ class CheckMaintenanceMiddleware(BaseMiddleware):
             await event.answer(text)
         elif isinstance(event, CallbackQuery):
             await event.answer("🔧 Технические работы", show_alert=True)
-            await event.message.answer(text)
+            if event.message:
+                await event.message.answer(text)
 
         return None  # Прерываем обработку
 
