@@ -2129,4 +2129,234 @@ async def cmd_addpromo(message: types.Message, state: FSMContext):
         return
     args = message.text.split(maxsplit=3)
     if len(args) < 4:
-       
+    await message.answer("❌ Использование: /addpromo код скидка% активации")
+        return
+    code = args[1].upper()
+    try:
+        discount = int(args[2])
+        max_uses = int(args[3])
+    except ValueError:
+        await message.answer("❌ Скидка и активации должны быть числами")
+        return
+    create_promocode(code, discount, max_uses)
+    await message.answer(f"✅ Промокод {code} создан!")
+
+@router.message(Command("helpadmin"))
+async def cmd_helpadmin(message: types.Message):
+    if not has_access(message.from_user.id, 'tech_admin'):
+        await message.answer("⛔ Нет доступа")
+        return
+    text = (
+        "📋 <b>Команды для администрации</b>\n\n"
+        "👥 <b>Управление ролями:</b>\n"
+        "/addagent @username\n"
+        "/addmoder @username\n"
+        "/addadmin @username\n"
+        "/delrole @username\n\n"
+        "⚠️ <b>Варны и баны:</b>\n"
+        "/warn @username причина\n"
+        "/warnlist @username\n"
+        "/unwarn @username\n"
+        "/ban @username причина\n"
+        "/tempban @username часы причина\n"
+        "/unban @username\n"
+        "/banlist\n\n"
+        "🎮 <b>Управление балансом:</b>\n"
+        "/givestars сумма @username\n"
+        "/delstars сумма @username\n"
+        "/checkbalance @username\n\n"
+        "📊 <b>Статистика:</b>\n"
+        "/orders - Показать заявки\n"
+        "/stats - Статистика бота\n"
+        "/tickets - Открытые тикеты\n"
+        "/ticket ID - Инфо о тикете\n"
+        "/answer ID текст - Ответить в тикет\n"
+        "/creport ID - Закрыть тикет\n\n"
+        "📢 <b>Рассылка:</b>\n"
+        "/news текст\n\n"
+        "🎁 <b>Промокоды:</b>\n"
+        "/addpromo код % активации\n\n"
+        "🛠️ <b>Техническое:</b>\n"
+        "/backup - Создать бекап\n"
+        "/restore имя_файла.db - Восстановить\n"
+        "/teh_on - Включить тех.работы\n"
+        "/teh_off - Выключить тех.работы\n"
+        "/freeze @username причина - Заморозить\n"
+        "/unfreeze @username - Разморозить\n\n"
+        "👨‍💼 <b>Администрация:</b>\n"
+        "/staff - Список администрации\n"
+        "/helpadmin - Эта справка"
+    )
+    await message.answer(text)
+
+@router.message(Command("orders"))
+async def cmd_orders(message: types.Message):
+    if not has_access(message.from_user.id, 'admin'):
+        await message.answer("⛔ Нет доступа")
+        return
+    orders = get_pending_orders()
+    if not orders:
+        await message.answer("✅ Нет pending заявок.")
+        return
+    for order in orders:
+        order_id, user_id, amount, recipient, screenshot, status, total_price, promo_id, discount, created_at, _, buyer_username = order
+        final_price = total_price - (discount or 0)
+        text = f"🆔 <b>Заявка #{order_id}</b>\n\n👤 Покупатель: @{buyer_username}\n⭐ Количество: {amount} звёзд\n💰 Сумма: {final_price:.2f}₽\n🎯 Получатель: {recipient}\n📅 Дата: {format_datetime(created_at)}"
+        await message.answer(text)
+        if os.path.exists(screenshot):
+            photo = FSInputFile(screenshot)
+            await message.answer_photo(photo, caption=f"Заявка #{order_id}", reply_markup=get_order_action_keyboard(order_id))
+        else:
+            await message.answer("⚠️ Скриншот не найден", reply_markup=get_order_action_keyboard(order_id))
+
+@router.message(Command("stats"))
+async def cmd_stats(message: types.Message):
+    if not has_access(message.from_user.id, 'admin'):
+        await message.answer("⛔ Нет доступа")
+        return
+    revenue_day = get_revenue_for_period(1)
+    revenue_week = get_revenue_for_period(7)
+    revenue_month = get_revenue_for_period(30)
+    active_day = get_active_users_count(1)
+    active_week = get_active_users_count(7)
+    active_month = get_active_users_count(30)
+    avg_day = get_average_check(1)
+    avg_week = get_average_check(7)
+    avg_month = get_average_check(30)
+    top = get_top_buyers_no_admins(5)
+    text = (
+        f"📊 <b>Статистика бота</b>\n\n"
+        f"💰 <b>Выручка:</b>\n"
+        f"├─ День: {revenue_day:.2f}₽\n"
+        f"├─ Неделя: {revenue_week:.2f}₽\n"
+        f"└─ Месяц: {revenue_month:.2f}₽\n\n"
+        f"👥 <b>Активные:</b>\n"
+        f"├─ День: {active_day}\n"
+        f"├─ Неделя: {active_week}\n"
+        f"└─ Месяц: {active_month}\n\n"
+        f"🧾 <b>Средний чек:</b>\n"
+        f"├─ День: {avg_day:.2f}₽\n"
+        f"├─ Неделя: {avg_week:.2f}₽\n"
+        f"└─ Месяц: {avg_month:.2f}₽\n\n"
+        f"🏆 <b>Топ-5 покупателей:</b>\n"
+    )
+    for i, (username, fullname, total) in enumerate(top, 1):
+        text += f"{i}. @{username or 'Аноним'} — {total:.2f}₽\n"
+    await message.answer(text)
+
+@router.message(Command("tickets"))
+async def cmd_tickets(message: types.Message):
+    if not has_access(message.from_user.id, 'moder'):
+        await message.answer("⛔ Нет доступа")
+        return
+    args = message.text.split()
+    if len(args) > 1 and args[1].lower() == 'all':
+        tickets = get_all_tickets()
+        title = "Все тикеты"
+    else:
+        tickets = get_all_tickets('open')
+        title = "Открытые тикеты"
+    if not tickets:
+        await message.answer(f"📭 {title} отсутствуют.")
+        return
+    text = f"📋 {title}:\n\n"
+    for ticket in tickets[:20]:
+        t_id, user_id, subject, status, _, _, priority, created_at = ticket[:8]
+        user = get_user(user_id)
+        username = user[2] if user else "Неизвестно"
+        text += f"{priority} #{t_id} - @{username} - {subject} - {status} - {format_datetime(created_at)}\n\n"
+    await message.answer(text)
+
+@router.message(Command("ticket"))
+async def cmd_ticket(message: types.Message):
+    if not has_access(message.from_user.id, 'moder'):
+        await message.answer("⛔ Нет доступа")
+        return
+    args = message.text.split()
+    if len(args) < 2:
+        await message.answer("❌ Использование: /ticket ID")
+        return
+    try:
+        ticket_id = int(args[1])
+    except ValueError:
+        await message.answer("❌ ID должен быть числом")
+        return
+    ticket = get_ticket(ticket_id)
+    if not ticket:
+        await message.answer("❌ Тикет не найден")
+        return
+    user = get_user(ticket[1])
+    username = user[2] if user else "Неизвестно"
+    text = (
+        f"📋 Тикет #{ticket[0]}\n"
+        f"👤 Пользователь: @{username} (ID: {ticket[1]})\n"
+        f"📅 Создан: {format_datetime(ticket[6])}\n"
+        f"📊 Статус: {ticket[3]}\n"
+        f"🔰 Приоритет: {ticket[6] if len(ticket)>6 else '🟢'}\n"
+        f"📝 Тема: {ticket[2]}\n"
+        f"📌 ID темы: {ticket[4]}"
+    )
+    await message.answer(text)
+
+@router.message(Command("answer"))
+async def cmd_answer(message: types.Message):
+    if not has_access(message.from_user.id, 'agent'):
+        await message.answer("⛔ Нет доступа")
+        return
+    args = message.text.split(maxsplit=2)
+    if len(args) < 3:
+        await message.answer("❌ Использование: /answer ID текст")
+        return
+    try:
+        ticket_id = int(args[1])
+    except ValueError:
+        await message.answer("❌ ID должен быть числом")
+        return
+    answer_text = args[2]
+    ticket = get_ticket(ticket_id)
+    if not ticket:
+        await message.answer("❌ Тикет не найден")
+        return
+    if ticket[3] == 'closed':
+        await message.answer("❌ Тикет закрыт. Нельзя отправить ответ.")
+        return
+    add_ticket_message(ticket_id, message.from_user.id, answer_text, is_from_support=True)
+    from main import bot
+    try:
+        await bot.send_message(
+            ticket[1],
+            f"📩 <b>Ответ на ваш тикет #{ticket_id}</b>\n\n{answer_text}"
+        )
+        await message.answer(f"✅ Ответ отправлен в тикет #{ticket_id}")
+    except Exception as e:
+        logger.error(f"Ошибка отправки ответа: {e}")
+        await message.answer("❌ Не удалось отправить ответ пользователю")
+
+@router.message(Command("creport"))
+async def cmd_creport(message: types.Message):
+    if not has_access(message.from_user.id, 'agent'):
+        await message.answer("⛔ Нет доступа")
+        return
+    args = message.text.split()
+    if len(args) < 2:
+        await message.answer("❌ Использование: /creport ID")
+        return
+    try:
+        ticket_id = int(args[1])
+    except ValueError:
+        await message.answer("❌ ID должен быть числом")
+        return
+    ticket = get_ticket(ticket_id)
+    if not ticket:
+        await message.answer("❌ Тикет не найден")
+        return
+    if ticket[3] == 'closed':
+        await message.answer("❌ Тикет уже закрыт.")
+        return
+    update_ticket_status(ticket_id, 'closed')
+    await message.answer(f"✅ Тикет #{ticket_id} закрыт")
+
+# ========== ЗАГЛУШКА ==========
+@router.callback_query(F.data == "no_action")
+async def no_action(callback: types.CallbackQuery):
+    await callback.answer("Это действие уже обработано", show_alert=True)  
