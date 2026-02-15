@@ -2129,7 +2129,7 @@ async def cmd_addpromo(message: types.Message, state: FSMContext):
         return
     args = message.text.split(maxsplit=3)
     if len(args) < 4:
-    await message.answer("❌ Использование: /addpromo код скидка% активации")
+        await message.answer("❌ Использование: /addpromo код скидка% активации")
         return
     code = args[1].upper()
     try:
