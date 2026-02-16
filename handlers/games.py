@@ -1,4 +1,4 @@
-#// FILE: bot/handlers/games.py
+# FILE: handlers/games.py
 import logging
 import random
 import uuid
@@ -13,7 +13,7 @@ from config import (
 )
 from database import (
     get_user, update_balance, create_game_record, update_game_result,
-    check_game_processed, check_action_allowed, mark_action_processed
+    check_game_processed
 )
 from keyboards import MenuCallback, GameCallback, get_games_menu, get_mines_game_keyboard, get_casino_bet_amount_keyboard, get_back_to_menu_keyboard
 from states import GameStates
@@ -59,9 +59,8 @@ async def start_mines_game(callback: types.CallbackQuery, state: FSMContext):
 
     # Дедупликация
     action_id = f"mines_start_{user_id}_{uuid.uuid4()}"
-    allowed, msg = check_action_allowed(user_id, "mines_start", action_id)
-    if not allowed:
-        await callback.answer(msg, show_alert=True)
+    if await is_duplicate_action(action_id):
+        await callback.answer("⏳ Игра уже запущена", show_alert=True)
         return
 
     game_id = str(uuid.uuid4())
@@ -77,7 +76,6 @@ async def start_mines_game(callback: types.CallbackQuery, state: FSMContext):
         f"Проигрыш: -{MINES_GAME_LOSE_PENALTY} ⭐",
         reply_markup=get_mines_game_keyboard(game_id)
     )
-    mark_action_processed(action_id, user_id, "mines_start")
     await callback.answer()
 
 @router.callback_query(GameCallback.filter(F.action == "mines_choice"))
@@ -135,8 +133,6 @@ async def start_casino_game(callback: types.CallbackQuery):
 
 @router.callback_query(GameCallback.filter(F.action == "casino_bet"))
 async def process_casino_bet(callback: types.CallbackQuery, callback_data: GameCallback, state: FSMContext):
-    from main import bot
-
     user_id = callback.from_user.id
     bet_amount = callback_data.bet_amount
 
@@ -158,33 +154,44 @@ async def process_casino_bet(callback: types.CallbackQuery, callback_data: GameC
         await callback.answer("❌ Ошибка списания!", show_alert=True)
         return
 
-    dice_message = await bot.send_dice(chat_id=user_id, emoji="🎰")
+    # Отправляем дайс
+    dice_message = await callback.bot.send_dice(chat_id=user_id, emoji="🎰")
     await state.update_data(
         game_id=game_id,
         dice_message_id=dice_message.message_id,
         bet_amount=bet_amount
     )
-    await callback.message.edit_text(
-        f"🎰 <b>Крутим барабаны...</b>\n\nСтавка: {bet_amount} ⭐",
-        reply_markup=None
-    )
+
+    # Редактируем сообщение с кнопками
+    try:
+        await callback.message.edit_text(
+            f"🎰 <b>Крутим барабаны...</b>\n\nСтавка: {bet_amount} ⭐",
+            reply_markup=None
+        )
+    except Exception as e:
+        logger.error(f"Ошибка при редактировании сообщения: {e}")
+
     await callback.answer()
 
 @router.message(F.dice.emoji == "🎰")
 async def process_casino_dice(message: types.Message, state: FSMContext):
-    from main import bot
-
+    user_id = message.from_user.id
     data = await state.get_data()
+
     if not data or 'game_id' not in data:
+        logger.debug("Нет данных состояния для обработки дайса")
         return
 
     game_id = data['game_id']
     dice_message_id = message.message_id
 
+    # Проверяем, что это тот самый дайс, который мы отправили
     if data.get('dice_message_id') != dice_message_id:
+        logger.debug("ID сообщения дайса не совпадает с сохранённым")
         return
 
     if check_game_processed(game_id):
+        logger.debug(f"Игра {game_id} уже обработана")
         return
 
     dice_value = message.dice.value
@@ -193,28 +200,30 @@ async def process_casino_dice(message: types.Message, state: FSMContext):
 
     if result == "win":
         win_amount = int(bet_amount * CASINO_WIN_MULTIPLIER)
-        update_balance(message.from_user.id, win_amount, 'virtual', 'add')
+        if update_balance(user_id, win_amount, 'virtual', 'add'):
+            update_game_result(game_id, win_amount, result, dice_message_id)
+            result_text = (
+                f"🎉 <b>ДЖЕКПОТ! 777!</b>\n\n"
+                f"Ваша ставка: {bet_amount} ⭐\n"
+                f"Выигрыш: {win_amount} ⭐\n"
+                f"Множитель: {CASINO_WIN_MULTIPLIER}x"
+            )
+        else:
+            result_text = "❌ Ошибка начисления выигрыша"
+            update_game_result(game_id, 0, "error", dice_message_id)
     else:
         win_amount = 0
-
-    update_game_result(game_id, win_amount, result, dice_message_id)
-
-    if result == "win":
-        result_text = (
-            f"🎉 <b>ДЖЕКПОТ! 777!</b>\n\n"
-            f"Ваша ставка: {bet_amount} ⭐\n"
-            f"Выигрыш: {win_amount} ⭐\n"
-            f"Множитель: {CASINO_WIN_MULTIPLIER}x"
-        )
-    else:
+        update_game_result(game_id, win_amount, result, dice_message_id)
         result_text = (
             f"😢 <b>Вы проиграли</b>\n\n"
             f"Ваша ставка: {bet_amount} ⭐\n"
             f"С вашего баланса списано: {bet_amount} ⭐"
         )
 
+    # Отправляем результат
     try:
-        await bot.send_message(message.chat.id, result_text, reply_markup=get_back_to_menu_keyboard())
+        await message.bot.send_message(user_id, result_text, reply_markup=get_back_to_menu_keyboard())
+        logger.info(f"Результат казино для {user_id}: {result}, ставка {bet_amount}, выигрыш {win_amount}")
     except Exception as e:
         logger.error(f"Ошибка отправки результата казино: {e}")
 
