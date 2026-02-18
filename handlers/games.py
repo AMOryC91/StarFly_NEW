@@ -34,7 +34,7 @@ async def show_games_menu(callback: types.CallbackQuery):
         "• 1 шар выигрышный\n"
         f"• Победа: +{MINES_GAME_WIN_REWARD} ⭐\n"
         f"• Проигрыш: -{MINES_GAME_LOSE_PENALTY} ⭐\n\n"
-        "🎰 <b>Казино</b>\n"
+        "🎰 <b>Рулетка</b>\n"
         f"• Ставки: {', '.join(map(str, CASINO_BET_AMOUNTS))} ⭐\n"
         "• Выигрыш только при 777\n"
         f"• Шанс выигрыша: {CASINO_WIN_CHANCE*100}%\n"
@@ -125,7 +125,7 @@ async def process_mines_choice(callback: types.CallbackQuery, callback_data: Gam
 @router.callback_query(MenuCallback.filter(F.action == "game_casino"))
 async def start_casino_game(callback: types.CallbackQuery):
     await callback.message.edit_text(
-        "🎰 <b>Казино (только виртуальные звёзды)</b>\n\n"
+        "🎰 <b>Рулетка (только виртуальные звёзды)</b>\n\n"
         "Выберите сумму ставки:",
         reply_markup=get_casino_bet_amount_keyboard()
     )
